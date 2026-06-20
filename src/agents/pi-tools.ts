@@ -66,6 +66,10 @@ function isOpenAIProvider(provider?: string) {
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   voice: ["tts"],
 };
+// xAI/Grok models expose a provider-native `web_search` tool. Sending OpenClaw's
+// local `web_search` function tool alongside it makes xAI reject the request for a
+// duplicate tool name, so we drop the local tool for xAI providers (direct or via
+// OpenRouter `x-ai/*`). Non-xAI providers keep the local `web_search` tool.
 const XAI_RESERVED_LOCAL_TOOL_NAMES = new Set(["web_search"]);
 
 function normalizeMessageProvider(messageProvider?: string): string | undefined {
