@@ -43,6 +43,7 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import { isXaiProvider } from "./schema/clean-for-xai.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
@@ -65,6 +66,11 @@ function isOpenAIProvider(provider?: string) {
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   voice: ["tts"],
 };
+// xAI/Grok models expose a provider-native `web_search` tool. Sending OpenClaw's
+// local `web_search` function tool alongside it makes xAI reject the request for a
+// duplicate tool name, so we drop the local tool for xAI providers (direct or via
+// OpenRouter `x-ai/*`). Non-xAI providers keep the local `web_search` tool.
+const XAI_RESERVED_LOCAL_TOOL_NAMES = new Set(["web_search"]);
 
 function normalizeMessageProvider(messageProvider?: string): string | undefined {
   const normalized = messageProvider?.trim().toLowerCase();
@@ -85,6 +91,16 @@ function applyMessageProviderToolPolicy(
   }
   const deniedSet = new Set(deniedTools);
   return tools.filter((tool) => !deniedSet.has(tool.name));
+}
+
+function applyModelReservedToolPolicy(
+  tools: AnyAgentTool[],
+  options?: { modelProvider?: string; modelId?: string },
+): AnyAgentTool[] {
+  if (!isXaiProvider(options?.modelProvider, options?.modelId)) {
+    return tools;
+  }
+  return tools.filter((tool) => !XAI_RESERVED_LOCAL_TOOL_NAMES.has(tool.name));
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -525,10 +541,14 @@ export function createOpenClawCodingTools(options?: {
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
   });
+  const modelFiltered = applyModelReservedToolPolicy(subagentFiltered, {
+    modelProvider: options?.modelProvider,
+    modelId: options?.modelId,
+  });
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
-  const normalized = subagentFiltered.map((tool) =>
+  const normalized = modelFiltered.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
